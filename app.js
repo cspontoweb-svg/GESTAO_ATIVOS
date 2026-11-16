@@ -1,120 +1,198 @@
-/* CS Empreiteira - Gestão de Ativos 1.0
-   Front-end inicial. Persistência local via IndexedDB.
-   Integração com Apps Script: configurar API_URL e autenticação antes da produção. */
-const API_URL = ""; // Cole aqui a URL /exec do Web App Apps Script após implantação.
-const DB_NAME = "CS_Gestao_Ativos_1_0";
-const DB_VERSION = 1;
-let db, selectedAsset = null, stream = null, detector = null;
+/* CS EMPREITEIRA | Gestão de Ativos 1.0
+   Frontend integrado ao Apps Script. Operações só são confirmadas pelo servidor.
+*/
+const API_URL = "https://script.google.com/macros/s/AKfycbySOPR_9Th0svtXpD4h1Luu4ajH05LwkOj0oXBFcmf_m7-LeAkkHD1x1Ifx6cL1_EDI/exec";
+const DEVICE_KEY = "CSGA_DEVICE_ID";
 const $ = id => document.getElementById(id);
-const nowISO = () => new Date().toISOString();
-const uuid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const state = {adminToken:"", selectedEmployee:null, asset:null, scanner:null, scanTarget:""};
+const makeId = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now()+"-"+Math.random().toString(16).slice(2));
+const deviceId = localStorage.getItem(DEVICE_KEY) || (()=>{const x="TAB-"+makeId();localStorage.setItem(DEVICE_KEY,x);return x;})();
+const nowLocal = () => {const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
+const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-function openDB(){
+function jsonp(params){
   return new Promise((resolve,reject)=>{
-    const req=indexedDB.open(DB_NAME,DB_VERSION);
-    req.onupgradeneeded=()=>{
-      const d=req.result;
-      if(!d.objectStoreNames.contains("assets")) d.createObjectStore("assets",{keyPath:"code"});
-      if(!d.objectStoreNames.contains("movements")) d.createObjectStore("movements",{keyPath:"operationId"});
-      if(!d.objectStoreNames.contains("settings")) d.createObjectStore("settings",{keyPath:"key"});
-    };
-    req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error);
+    const cb="csgacb_"+Math.random().toString(36).slice(2);
+    const script=document.createElement("script");
+    const timer=setTimeout(()=>{cleanup();reject(new Error("Tempo esgotado ao consultar o servidor."))},20000);
+    function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}
+    window[cb]=data=>{cleanup();data&&data.ok===false?reject(new Error(data.message||"Falha no servidor.")):resolve(data)};
+    const q=new URLSearchParams({...params,callback:cb});
+    script.src=API_URL+"?"+q.toString();
+    script.onerror=()=>{cleanup();reject(new Error("Não foi possível acessar o servidor."))};
+    document.body.appendChild(script);
   });
 }
-function store(name,mode="readonly"){return db.transaction(name,mode).objectStore(name)}
-function put(name,value){return new Promise((res,rej)=>{const r=store(name,"readwrite").put(value);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
-function get(name,key){return new Promise((res,rej)=>{const r=store(name).get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
-function all(name){return new Promise((res,rej)=>{const r=store(name).getAll();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
-async function seed(){
-  const existing=await all("assets"); if(existing.length) return;
-  const demo=[
-    {code:"EQP00001",name:"Furadeira de impacto",location:"Almoxarifado Central",status:"DISPONIVEL",holder:""},
-    {code:"EQP00002",name:"Esmerilhadeira",location:"Frente 301",status:"EM_POSSE",holder:"10018"},
-    {code:"EQP00003",name:"Martelete",location:"Almoxarifado Central",status:"MANUTENCAO",holder:""}
-  ];
-  for(const a of demo) await put("assets",a);
-  await put("settings",{key:"front",name:"Frente 301",work:"CS Empreiteira",device:"Tablet Almoxarifado A",adminConfigured:false});
+
+/* POST via formulário/iframe evita depender de CORS em chamadas fetch cross-origin.
+   O Apps Script responde com uma página que envia o resultado por postMessage. */
+function postApi(payload){
+  return new Promise((resolve,reject)=>{
+    const frame=$("gasResponseFrame");
+    const form=document.createElement("form");
+    const requestId=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():("REQ-"+Date.now()+"-"+Math.random().toString(16).slice(2));
+    const body={...payload,requestId};
+    form.method="POST";form.action=API_URL;form.target=frame.name;form.style.display="none";
+    const input=document.createElement("input");input.type="hidden";input.name="payload";input.value=JSON.stringify(body);form.appendChild(input);
+    const timer=setTimeout(()=>{window.removeEventListener("message",correlated);form.remove();reject(new Error("Tempo esgotado na operação central."))},25000);
+    function correlated(ev){
+      let data=ev.data;
+      if(typeof data==="string"){try{data=JSON.parse(data)}catch(_){return}}
+      if(!data||data.requestId!==requestId)return;
+      clearTimeout(timer);window.removeEventListener("message",correlated);form.remove();
+      if(data.ok)resolve(data);else reject(new Error(data.message||"Operação recusada pelo servidor."));
+    }
+    window.addEventListener("message",correlated);
+    document.body.appendChild(form);form.submit();
+  });
 }
-async function render(){
-  const assets=await all("assets"), movements=(await all("movements")).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-  $("mTotal").textContent=assets.length;
-  $("mAvailable").textContent=assets.filter(a=>a.status==="DISPONIVEL").length;
-  $("mHeld").textContent=assets.filter(a=>a.status==="EM_POSSE").length;
-  $("mMaintenance").textContent=assets.filter(a=>a.status==="MANUTENCAO").length;
-  const cfg=await get("settings","front");
-  $("frontName").textContent=cfg?.name||"Frente não configurada";
-  $("frontWork").textContent=cfg?.work||"CS Empreiteira";
-  $("movementRows").innerHTML=movements.length?movements.slice(0,15).map(m=>`<tr><td>${new Date(m.createdAt).toLocaleString("pt-BR")}</td><td>${escapeHTML(m.assetCode)}</td><td>${escapeHTML(m.type)}</td><td>${escapeHTML(m.employeeCode)}</td><td>${escapeHTML(m.front)}</td><td>${m.syncStatus==="SYNCED"?"Sincronizado":"Pendente"}</td></tr>`).join(""):'<tr><td colspan="6" class="muted">Nenhuma movimentação neste dispositivo.</td></tr>';
-  $("pendingCount").textContent=`${movements.filter(m=>m.syncStatus!=="SYNCED").length} pendentes`;
-  $("connection").textContent=navigator.onLine?"Conectado":"Offline";
-}
-function escapeHTML(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-async function lookup(){
-  const code=$("assetCode").value.trim().toUpperCase(), a=await get("assets",code);
-  selectedAsset=a||null;
-  if(!a){$("assetCard").className="asset-card empty";$("assetCard").innerHTML='<div class="empty-icon">⚠</div><h3>Equipamento não encontrado</h3><p>Verifique o código ou sincronize o cadastro.</p>';return}
-  const st=a.status==="DISPONIVEL"?'<span class="status">DISPONÍVEL</span>':a.status==="EM_POSSE"?'<span class="status held">EM POSSE</span>':'<span class="status maintenance">MANUTENÇÃO</span>';
-  $("assetCard").className="asset-card";
-  $("assetCard").innerHTML=`<div class="eyebrow">EQUIPAMENTO IDENTIFICADO</div><div class="asset-code">${escapeHTML(a.code)}</div><h3>${escapeHTML(a.name)}</h3>${st}<p>Localização: ${escapeHTML(a.location||"Não informada")}</p><p>${a.holder?`Matrícula em posse: ${escapeHTML(a.holder)}`:"Sem responsável vinculado"}</p>`;
-}
-function message(text,type=""){ $("operationMessage").textContent=text; $("operationMessage").className=`message ${type}`; }
-async function submitMovement(){
-  if(!selectedAsset){message("Leia ou consulte um equipamento antes de registrar.","error");return}
-  const employee=$("employeeCode").value.trim(), type=$("movementType").value, condition=$("returnCondition").value;
-  if(!employee){message("Informe a matrícula do colaborador.","error");return}
-  const cfg=await get("settings","front");
-  if(!cfg?.name){message("Frente ativa não configurada pelo ADMIN neste tablet.","error");return}
-  const a=await get("assets",selectedAsset.code);
-  if(type==="RETIRADA"&&a.status!=="DISPONIVEL"){message("Retirada bloqueada: equipamento não está disponível neste cadastro local. Validação central obrigatória para confirmação.","error");return}
-  if(type==="DEVOLUCAO"&&(a.status!=="EM_POSSE"||a.holder!==employee)){message("Devolução bloqueada: matrícula não corresponde à posse local registrada.","error");return}
-  if(type==="TRANSFERENCIA_SAIDA"&&a.status!=="DISPONIVEL"){message("Transferência de saída exige equipamento disponível ou fluxo de encerramento da posse.","error");return}
-  if(type==="TRANSFERENCIA_RECEBIMENTO"&&!$("destinationFront").value){message("Selecione a frente de destino.","error");return}
-  const operationId=uuid(), movement={operationId,assetCode:a.code,type,employeeCode:employee,front:cfg.name,work:cfg.work,device:cfg.device,createdAt:nowISO(),syncStatus:"PENDING",condition:type==="DEVOLUCAO"?condition:"",destinationFront:$("destinationFront").value||""};
-  await put("movements",movement);
-  if(type==="RETIRADA") await put("assets",{...a,status:"EM_POSSE",holder:employee});
-  if(type==="DEVOLUCAO") await put("assets",{...a,status:condition==="BOM"?"DISPONIVEL":"MANUTENCAO",holder:""});
-  if(type==="AVARIA") await put("assets",{...a,status:"MANUTENCAO"});
-  selectedAsset=await get("assets",a.code); await render(); await lookup();
-  message(`Apontamento gravado localmente. ID da operação: ${operationId}. Aguardando validação/sincronização central.`, "success");
-  syncPending();
-}
-async function syncPending(){
-  if(!navigator.onLine||!API_URL) return;
-  // A integração autenticada do backend deve ser habilitada antes de produção.
-  // Não marcar como sincronizado sem confirmação explícita do servidor.
-}
-async function startCamera(){
-  if(!("BarcodeDetector" in window)){message("Este navegador não oferece BarcodeDetector. Use a entrada manual do código ou integre uma biblioteca QR local.","error");return}
+
+function setMsg(id,text,type=""){const el=$(id);el.textContent=text;el.className="message "+type}
+async function loadDashboard(){
   try{
-    detector=new BarcodeDetector({formats:["qr_code"]});
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-    $("camera").srcObject=stream; $("camera").hidden=false; await $("camera").play();
-    $("startScan").disabled=true;$("stopScan").disabled=false;
-    const tick=async()=>{if(!stream)return;try{const codes=await detector.detect($("camera"));if(codes.length){$("assetCode").value=String(codes[0].rawValue).trim().toUpperCase();stopCamera();await lookup();}}catch(e){} if(stream)requestAnimationFrame(tick)};
-    tick();
-  }catch(e){message("Não foi possível abrir a câmera. Verifique a permissão do navegador e use HTTPS.","error")}
+    const d=await jsonp({action:"bootstrap",deviceId});
+    $("connection").textContent="Servidor conectado";
+    $("frontName").textContent=d.device?.front||"Frente não configurada";
+    $("frontWork").textContent=d.device?.work||"Aguardando configuração ADMIN";
+    $("mTotal").textContent=d.metrics.total;
+    $("mAvailable").textContent=d.metrics.available;
+    $("mHeld").textContent=d.metrics.held;
+    $("mUnavailable").textContent=d.metrics.unavailable;
+    $("movementRows").innerHTML=d.latest.length?d.latest.map(m=>`<tr><td>${esc(m.date)}</td><td>${esc(m.assetCode)}</td><td>${esc(m.employeeName)}</td><td>${esc(labelType(m.type))}</td><td>${esc(m.status)}</td></tr>`).join(""):'<tr><td colspan="5">Nenhuma movimentação encontrada.</td></tr>';
+  }catch(e){$("connection").textContent="Sem conexão";setMsg("operationMessage",e.message,"error")}
 }
-function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}$("camera").hidden=true;$("startScan").disabled=false;$("stopScan").disabled=true}
-function adminLogin(){
-  // Demonstração local apenas. Substituir por autenticação real validada no servidor.
-  const pass=prompt("Senha ADMIN de demonstração:");
-  if(pass==="CSADMIN-ALTERAR"){ $("adminPanel").classList.remove("hidden"); $("adminLoginBtn").classList.add("hidden"); }
-  else if(pass!==null) alert("Acesso não autorizado.");
+function labelType(t){return ({RETIRADA:"Retirada",DEVOLUCAO:"Devolução",TRANSFERENCIA_SAIDA:"Transferência — saída",TRANSFERENCIA_RECEBIMENTO:"Transferência — recebimento",AVARIA:"Avaria"})[t]||t}
+
+async function searchEmployees(){
+  const q=$("employeeSearch").value.trim();
+  if(q.length<2){$("employeeResults").textContent="Digite pelo menos duas letras do nome.";return}
+  try{
+    const d=await jsonp({action:"searchEmployees",q});
+    $("employeeResults").innerHTML=d.items.length?d.items.map(e=>`<div class="result-item"><strong>${esc(e.name)}</strong><button class="button secondary" data-key="${esc(e.key)}" data-name="${esc(e.name)}">Gerar QR Code</button></div>`).join(""):"Nenhum colaborador ativo encontrado.";
+    $("employeeResults").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>issueQr(b.dataset.key,b.dataset.name)));
+  }catch(e){$("employeeResults").textContent=e.message}
 }
+async function issueQr(key,name){
+  try{
+    const d=await postApi({action:"issueEmployeeQr",employeeKey:key});
+    $("employeeQrName").textContent=name;
+    $("employeeQrImage").innerHTML="";
+    if(!window.QRCode)throw new Error("Biblioteca de QR Code indisponível. Verifique a internet.");
+    new QRCode($("employeeQrImage"),{text:d.qrValue,width:220,height:220,correctLevel:QRCode.CorrectLevel.M});
+    $("employeeQrPanel").classList.remove("hidden");
+    setTimeout(()=>{$("employeeQrPanel").scrollIntoView({behavior:"smooth",block:"center"})},100);
+  }catch(e){$("employeeResults").textContent=e.message}
+}
+
+async function lookupAsset(){
+  const code=$("assetCode").value.trim().toUpperCase();
+  if(!code){setMsg("operationMessage","Leia ou informe o código do equipamento.","error");return}
+  try{
+    const d=await jsonp({action:"getAsset",code});
+    state.asset=d.asset;
+    $("assetCard").className="asset-card";
+    $("assetCard").innerHTML=`<div class="eyebrow">EQUIPAMENTO IDENTIFICADO</div><div class="asset-code">${esc(d.asset.code)}</div><h3>${esc(d.asset.name)}</h3><p>Situação: <strong>${esc(d.asset.statusLabel)}</strong></p><p>Localização: ${esc(d.asset.location||"Não informada")}</p><p>Responsável: ${esc(d.asset.holderName||"Sem responsável")}</p>`;
+  }catch(e){state.asset=null;$("assetCard").className="asset-card empty";$("assetCard").textContent=e.message}
+}
+async function registerMovement(){
+  if(!navigator.onLine){setMsg("operationMessage","Sem internet. Por segurança, retirada/devolução não pode ser confirmada offline.","error");return}
+  const assetCode=$("assetCode").value.trim().toUpperCase();
+  const employeeQr=$("employeeQrToken").value.trim();
+  const type=$("movementType").value;
+  if(!assetCode||!employeeQr){setMsg("operationMessage","Leia o QR Code do equipamento e o QR Code pessoal do colaborador.","error");return}
+  const payload={action:"registerMovement",assetCode,employeeQr,type,condition:$("returnCondition").value,destinationFront:$("destinationFront").value.trim(),deviceId,requestId:makeId()};
+  $("submitMovement").disabled=true;
+  try{
+    const d=await postApi(payload);
+    setMsg("operationMessage",d.message||"Movimentação confirmada pelo servidor.","success");
+    $("employeeQrToken").value="";$("assetCode").value="";$("destinationFront").value="";
+    state.asset=null;$("assetCard").className="asset-card empty";$("assetCard").textContent="Movimentação registrada. Leia o próximo equipamento.";
+    await loadDashboard();
+  }catch(e){setMsg("operationMessage",e.message,"error")}
+  finally{$("submitMovement").disabled=false}
+}
+
+async function startScan(target){
+  if(!window.Html5Qrcode){setMsg("operationMessage","Leitor QR não carregado. Use a entrada manual ou verifique a internet.","error");return}
+  stopScan();
+  const id=target==="asset"?"cameraAsset":"cameraEmployee";
+  const el=$(id);el.classList.add("active");
+  const scanner=new Html5Qrcode(id);
+  state.scanner=scanner;state.scanTarget=target;
+  try{
+    await scanner.start({facingMode:"environment"},{fps:10,qrbox:{width:230,height:230}},async text=>{
+      stopScan();
+      if(target==="asset"){$("assetCode").value=text.trim().toUpperCase();await lookupAsset()}
+      else $("employeeQrToken").value=text.trim();
+    });
+    $(target==="asset"?"stopAssetScan":"stopEmployeeScan").classList.remove("hidden");
+  }catch(e){el.classList.remove("active");setMsg("operationMessage","Não foi possível abrir a câmera. Verifique a permissão e use HTTPS.","error")}
+}
+async function stopScan(){
+  if(state.scanner){try{if(state.scanner.isScanning)await state.scanner.stop();await state.scanner.clear()}catch(_){}state.scanner=null}
+  ["cameraAsset","cameraEmployee"].forEach(id=>$(id).classList.remove("active"));
+  $("stopAssetScan").classList.add("hidden");$("stopEmployeeScan").classList.add("hidden");
+}
+
+function showAdminLogin(){$("adminModal").classList.remove("hidden");$("adminPassword").value="";$("adminPassword").focus()}
+async function adminLogin(){
+  const password=$("adminPassword").value;
+  if(!password){setMsg("adminLoginMessage","Informe a senha ADMIN.","error");return}
+  try{
+    const d=await postApi({action:"adminLogin",password,deviceId});
+    state.adminToken=d.token;$("adminModal").classList.add("hidden");$("adminPanel").classList.remove("hidden");
+    $("adminLoginBtn").classList.add("hidden");
+    if(d.device){$("adminDevice").value=d.device.name||"";$("adminWork").value=d.device.work||"";$("adminFront").value=d.device.front||"";$("adminWarehouse").value=d.device.warehouse||""}
+    setMsg("adminMessage","Acesso ADMIN autorizado.","success");
+  }catch(e){setMsg("adminLoginMessage",e.message,"error")}
+}
+async function adminPost(action,extra={}){if(!state.adminToken)throw new Error("Sessão ADMIN encerrada. Entre novamente.");return postApi({action,adminToken:state.adminToken,deviceId,...extra})}
 async function saveFront(){
-  const cfg={key:"front",name:$("adminFront").value,work:$("adminWork").value.trim()||"CS Empreiteira",device:$("adminDevice").value.trim()||"Tablet sem nome",adminConfigured:true,updatedAt:nowISO()};
-  await put("settings",cfg); await render(); alert("Frente salva localmente neste tablet. Na versão de produção, o servidor deverá validar e distribuir a autorização.");
+  try{const d=await adminPost("saveDevice",{deviceName:$("adminDevice").value.trim(),work:$("adminWork").value.trim(),front:$("adminFront").value.trim(),warehouse:$("adminWarehouse").value.trim()});setMsg("adminMessage",d.message,"success");await loadDashboard()}
+  catch(e){setMsg("adminMessage",e.message,"error")}
 }
 async function addAsset(){
-  const code=$("newAssetCode").value.trim().toUpperCase(),name=$("newAssetName").value.trim(),location=$("newAssetLocation").value.trim();
-  if(!/^EQP\d{5,}$/.test(code)||!name){alert("Informe um código como EQP00001 e uma descrição.");return}
-  if(await get("assets",code)){alert("Código já cadastrado neste tablet.");return}
-  await put("assets",{code,name,location,status:"DISPONIVEL",holder:""}); await render(); alert("Equipamento adicionado ao cadastro local de demonstração.");
+  try{const d=await adminPost("addAsset",{code:$("newAssetCode").value.trim().toUpperCase(),name:$("newAssetName").value.trim(),category:$("newAssetCategory").value.trim(),location:$("newAssetLocation").value.trim()});setMsg("adminMessage",d.message,"success");["newAssetCode","newAssetName","newAssetCategory","newAssetLocation"].forEach(id=>$(id).value="");await loadDashboard()}
+  catch(e){setMsg("adminMessage",e.message,"error")}
 }
-$("lookupBtn").onclick=lookup;$("assetCode").addEventListener("keydown",e=>{if(e.key==="Enter")lookup()});
-$("submitMovement").onclick=submitMovement;$("startScan").onclick=startCamera;$("stopScan").onclick=stopCamera;
-$("adminLoginBtn").onclick=adminLogin;$("adminLogoutBtn").onclick=()=>{$("adminPanel").classList.add("hidden");$("adminLoginBtn").classList.remove("hidden")};
-$("saveFrontBtn").onclick=saveFront;$("addAssetBtn").onclick=addAsset;
-$("movementType").onchange=()=>{$("conditionWrap").classList.toggle("hidden",$("movementType").value!=="DEVOLUCAO");$("destinationWrap").classList.toggle("hidden",$("movementType").value!=="TRANSFERENCIA_RECEBIMENTO")};
-window.addEventListener("online",()=>{render();syncPending()});window.addEventListener("offline",render);
-(async()=>{db=await openDB();await seed();await render();if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});})();
+async function loadAdminEmployees(){
+  try{
+    const d=await adminPost("adminEmployees");
+    $("adminEmployeeRows").innerHTML=d.items.map(e=>`<tr><td>${esc(e.name)}</td><td>${esc(e.matricula)}</td><td>${esc(e.qrStatus==="ATIVO"?"Emitido":"Não emitido")}</td><td>${esc(e.status)}</td><td><div class="button-row"><button class="button secondary" data-key="${esc(e.key)}" data-action="${e.qrStatus==="ATIVO"?"BLOCK":"ACTIVATE"}">${e.qrStatus==="ATIVO"?"Bloquear":"Ativar"}</button><button class="button secondary" data-key="${esc(e.key)}" data-action="REISSUE">Reemitir</button></div></td></tr>`).join("");
+    $("adminEmployeeRows").querySelectorAll("button").forEach(b=>b.addEventListener("click",async()=>{try{if(b.dataset.action==="REISSUE"){const r=await adminPost("reissueEmployeeQr",{employeeKey:b.dataset.key});setMsg("adminMessage",r.message,"success");}else{await adminPost("setEmployeeQrStatus",{employeeKey:b.dataset.key,qrStatus:b.dataset.action==="BLOCK"?"BLOQUEADO":"ATIVO"});}await loadAdminEmployees()}catch(e){setMsg("adminMessage",e.message,"error")}}));
+  }catch(e){setMsg("adminMessage",e.message,"error")}
+}
+async function generateReport(){
+  const start=$("reportStart").value,end=$("reportEnd").value,type=$("reportType").value;
+  if(!start||!end||start>end){setMsg("reportMessage","Informe um intervalo válido.","error");return}
+  try{
+    const d=await jsonp({action:"report",start,end,type});
+    const rows=d.movements.map(m=>`<tr><td>${esc(m.date)}</td><td>${esc(m.assetCode)}</td><td>${esc(m.employeeName)}</td><td>${esc(labelType(m.type))}</td><td>${esc(m.front)}</td><td>${esc(m.status)}</td></tr>`).join("");
+    const pending=d.pending.map(p=>`<tr><td>${esc(p.assetCode)}</td><td>${esc(p.employeeName)}</td><td>${esc(p.front)}</td><td>EM POSSE</td></tr>`).join("");
+    const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>CS Empreiteira - Relatório de Ativos</title><style>
+      body{font-family:Arial,sans-serif;color:#172b3a;margin:24px}h1,h2{color:#173b57}table{width:100%;border-collapse:collapse;margin:12px 0 24px}th,td{border:1px solid #ccd5dc;padding:7px;text-align:left;font-size:11px}th{background:#173b57;color:#fff}.meta{font-size:12px;color:#526575}@media print{body{margin:12mm}}
+      </style></head><body><h1>CS EMPREITEIRA</h1><h2>Relatório de Gestão de Ativos</h2><p class="meta">Período: ${esc(start)} a ${esc(end)} · Emitido: ${esc(new Date().toLocaleString("pt-BR"))}</p>
+      ${type!=="pendentes"?`<h2>Movimentações do período</h2><table><thead><tr><th>Data/hora</th><th>Equipamento</th><th>Colaborador</th><th>Operação</th><th>Frente</th><th>Situação</th></tr></thead><tbody>${rows||'<tr><td colspan="6">Nenhuma movimentação no período.</td></tr>'}</tbody></table>`:""}
+      ${type==="todos"||type==="pendentes"?`<h2>Pendências atuais de devolução</h2><table><thead><tr><th>Equipamento</th><th>Colaborador</th><th>Frente</th><th>Situação</th></tr></thead><tbody>${pending||'<tr><td colspan="4">Nenhuma pendência.</td></tr>'}</tbody></table>`:""}
+      <p class="meta">Relatório operacional consolidado pelo servidor central. Matrículas não são exibidas.</p><script>window.onload=()=>window.print();<\/script></body></html>`;
+    const w=window.open("","_blank");if(!w)throw new Error("Permita pop-ups para gerar o PDF.");w.document.open();w.document.write(html);w.document.close();
+    setMsg("reportMessage","Relatório central preparado. Na impressão, escolha Salvar como PDF.","success");
+  }catch(e){setMsg("reportMessage",e.message,"error")}
+}
+
+$("searchEmployeeBtn").onclick=searchEmployees;
+$("employeeSearch").addEventListener("keydown",e=>{if(e.key==="Enter")searchEmployees()});
+$("closeEmployeeQr").onclick=()=>$("employeeQrPanel").classList.add("hidden");
+$("scanAssetBtn").onclick=()=>startScan("asset");$("scanEmployeeBtn").onclick=()=>startScan("employee");
+$("stopAssetScan").onclick=stopScan;$("stopEmployeeScan").onclick=stopScan;
+$("assetCode").addEventListener("change",lookupAsset);$("submitMovement").onclick=registerMovement;
+$("movementType").onchange=()=>{$("conditionWrap").classList.toggle("hidden",!["DEVOLUCAO","AVARIA"].includes($("movementType").value));$("destinationWrap").classList.toggle("hidden",$("movementType").value!=="TRANSFERENCIA_SAIDA")};
+$("generateReportBtn").onclick=generateReport;$("refreshBtn").onclick=loadDashboard;
+$("adminLoginBtn").onclick=showAdminLogin;$("adminCancel").onclick=()=>$("adminModal").classList.add("hidden");$("adminSubmit").onclick=adminLogin;
+$("adminLogoutBtn").onclick=()=>{state.adminToken="";$("adminPanel").classList.add("hidden");$("adminLoginBtn").classList.remove("hidden")};
+$("saveFrontBtn").onclick=saveFront;$("addAssetBtn").onclick=addAsset;$("loadEmployeesAdmin").onclick=loadAdminEmployees;
+$("reportStart").value=nowLocal();$("reportEnd").value=nowLocal();
+window.addEventListener("online",loadDashboard);
+window.addEventListener("beforeunload",stopScan);
+if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});
+loadDashboard();
