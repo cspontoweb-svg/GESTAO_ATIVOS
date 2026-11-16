@@ -1,1 +1,10 @@
-{"name":"CS EMPREITEIRA | Gestão de Ativos","short_name":"CS Ativos","start_url":"./","display":"standalone","background_color":"#f4f7f9","theme_color":"#173b57","lang":"pt-BR"}
+{
+  "name": "CS Empreiteira - Gestão de Ativos 2.0.1",
+  "short_name": "CS Ativos",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f9",
+  "theme_color": "#173b57",
+  "lang": "pt-BR",
+  "description": "Gestão central de ativos, unidades, frentes e movimentações da CS Empreiteira"
+}

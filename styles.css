@@ -19,3 +19,15 @@ label{display:block;font-weight:bold;font-size:12px;margin:10px 0 5px}input,sele
 hr{border:0;border-top:1px solid var(--line);margin:22px 0}footer{text-align:center;color:var(--muted);font-size:11px;padding:24px}
 @media(max-width:760px){.topbar{align-items:flex-start;flex-direction:column}.metrics{grid-template-columns:repeat(2,1fr)}.scan-grid{grid-template-columns:1fr}.front-panel{align-items:flex-start;flex-direction:column}.form-grid{grid-template-columns:1fr}.span-two{grid-column:auto}.panel{padding:15px}.button-row,.input-row{flex-wrap:wrap}.button-row .button{flex:1}.result-item{align-items:flex-start;flex-direction:column}}
 @media print{.topbar,footer,.button,.panel:not(.print-area){display:none!important}}
+
+/* CSGA 2.0.1 — campos de seleção claros, vazios e editáveis */
+select{
+  appearance:auto;
+  -webkit-appearance:menulist;
+  cursor:pointer;
+  min-height:44px;
+  padding-right:34px;
+}
+select:invalid{color:#647583}
+select option{color:#172b3a}
+input::placeholder{color:#8a98a3}
