@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#173b57">
+  <meta name="description" content="CS Empreiteira - Gestão de Ativos">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+  <title>CS | Gestão de Ativos</title>
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="brand">CS EMPREITEIRA</div>
+    <div class="subbrand">GESTÃO DE ATIVOS</div>
+  </div>
+  <div class="top-actions">
+    <span id="connection" class="pill">Verificando conexão...</span>
+    <button id="adminLoginBtn" class="button button-light">Acesso ADMIN</button>
+  </div>
+</header>
+
+<main class="container">
+  <section class="front-panel">
+    <div>
+      <div class="eyebrow">FRENTE DE TRABALHO ATIVA</div>
+      <h1 id="frontName">Não configurada</h1>
+      <p id="frontWork">Aguardando configuração do ADMIN</p>
+    </div>
+    <span class="lock">🔒 Definida pelo ADMIN</span>
+  </section>
+
+  <section class="metrics" aria-label="Indicadores operacionais">
+    <article class="metric"><span>Total de equipamentos</span><strong id="mTotal">0</strong><small>Cadastro conhecido neste tablet</small></article>
+    <article class="metric"><span>Disponíveis</span><strong id="mAvailable" class="green">0</strong><small>Prontos para retirada</small></article>
+    <article class="metric"><span>Em posse</span><strong id="mHeld">0</strong><small>Com colaboradores</small></article>
+    <article class="metric"><span>Em manutenção</span><strong id="mMaintenance" class="orange">0</strong><small>Indisponíveis</small></article>
+  </section>
+
+  <section class="panel">
+    <h2>Leitura e apontamentos</h2>
+    <div class="scan-layout">
+      <div class="scan-box">
+        <div class="scan-icon">▦</div>
+        <h3>Identificar equipamento</h3>
+        <p>Leia o QR Code com a câmera ou informe o código patrimonial.</p>
+        <video id="camera" playsinline muted hidden></video>
+        <div class="button-row">
+          <button id="startScan" class="button button-primary">Abrir câmera / Ler QR</button>
+          <button id="stopScan" class="button button-secondary" disabled>Parar câmera</button>
+        </div>
+        <label for="assetCode">Código do equipamento</label>
+        <div class="input-row">
+          <input id="assetCode" autocomplete="off" placeholder="EQP00001">
+          <button id="lookupBtn" class="button button-primary">Consultar</button>
+        </div>
+        <p class="hint">O QR Code contém somente o identificador, por exemplo: EQP00001.</p>
+      </div>
+
+      <div id="assetCard" class="asset-card empty">
+        <div class="empty-icon">▣</div>
+        <h3>Nenhum equipamento identificado</h3>
+        <p>Faça a leitura para consultar a situação patrimonial.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Registrar movimentação</h2>
+    <div class="form-grid">
+      <div>
+        <label for="employeeCode">Matrícula do colaborador</label>
+        <input id="employeeCode" placeholder="Digite ou leia o crachá">
+      </div>
+      <div>
+        <label for="movementType">Tipo de apontamento</label>
+        <select id="movementType">
+          <option value="RETIRADA">Retirada</option>
+          <option value="DEVOLUCAO">Devolução</option>
+          <option value="TRANSFERENCIA_SAIDA">Transferência - saída</option>
+          <option value="TRANSFERENCIA_RECEBIMENTO">Transferência - recebimento</option>
+          <option value="AVARIA">Informar avaria</option>
+        </select>
+      </div>
+      <div id="conditionWrap" class="hidden">
+        <label for="returnCondition">Condição na devolução</label>
+        <select id="returnCondition">
+          <option value="BOM">Bom estado</option>
+          <option value="AVARIA">Com avaria</option>
+        </select>
+      </div>
+      <div id="destinationWrap" class="hidden">
+        <label for="destinationFront">Frente de destino</label>
+        <select id="destinationFront">
+          <option value="">Selecione no cadastro</option>
+          <option>Frente 301</option><option>Frente 302</option><option>Frente 204</option>
+          <option>Frente 208</option><option>Frente 101</option><option>Frente 111</option>
+        </select>
+      </div>
+    </div>
+    <button id="submitMovement" class="button button-primary button-wide">Registrar apontamento</button>
+    <p id="operationMessage" class="message" role="status">Aguardando operação.</p>
+    <p class="hint">O registro local fica na fila de sincronização quando não houver internet. A confirmação central depende da validação do servidor.</p>
+  </section>
+
+  <section class="panel">
+    <div class="section-heading"><h2>Últimas movimentações</h2><span id="pendingCount" class="pill">0 pendentes</span></div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Data/hora</th><th>Equipamento</th><th>Operação</th><th>Matrícula</th><th>Frente</th><th>Sincronização</th></tr></thead>
+      <tbody id="movementRows"><tr><td colspan="6" class="muted">Nenhuma movimentação neste dispositivo.</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section id="adminPanel" class="panel hidden">
+    <div class="section-heading"><h2>Painel ADMIN</h2><button id="adminLogoutBtn" class="button button-secondary">Sair do ADMIN</button></div>
+    <p class="hint">Acesso demonstrativo. Antes de operar em produção, configure a senha e as permissões no Apps Script conforme o README.</p>
+    <div class="form-grid">
+      <div><label for="adminDevice">Dispositivo</label><input id="adminDevice" value="Tablet Almoxarifado A"></div>
+      <div><label for="adminWork">Obra</label><input id="adminWork" value="CS Empreiteira"></div>
+      <div><label for="adminFront">Frente ativa</label>
+        <select id="adminFront"><option>Frente 301</option><option>Frente 302</option><option>Frente 204</option><option>Frente 208</option><option>Frente 101</option><option>Frente 111</option></select>
+      </div>
+    </div>
+    <button id="saveFrontBtn" class="button button-primary">Salvar frente deste tablet</button>
+    <hr>
+    <h3>Cadastro rápido de equipamento (local de demonstração)</h3>
+    <div class="form-grid">
+      <div><label for="newAssetCode">Código QR</label><input id="newAssetCode" placeholder="EQP00001"></div>
+      <div><label for="newAssetName">Descrição</label><input id="newAssetName" placeholder="Furadeira de impacto"></div>
+      <div><label for="newAssetLocation">Localização inicial</label><input id="newAssetLocation" placeholder="Almoxarifado Central"></div>
+    </div>
+    <button id="addAssetBtn" class="button button-secondary">Adicionar ao cadastro local</button>
+    <p class="hint">O cadastro definitivo será realizado pelo ADMIN no banco central após configurar o backend.</p>
+  </section>
+</main>
+
+<footer>CS EMPREITEIRA · Gestão de Ativos 1.0 · Aplicação inicial</footer>
+<script src="app.js"></script>
+</body>
+</html>
