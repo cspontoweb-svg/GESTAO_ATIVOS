@@ -246,3 +246,44 @@ async function importCsvFile(inputId,action){
 }
 if($("importEmployeesBtn"))$("importEmployeesBtn").onclick=()=>importCsvFile("csvEmployees","importEmployeesCsv");
 if($("importAssetsBtn"))$("importAssetsBtn").onclick=()=>importCsvFile("csvAssets","importAssetsCsv");
+/* =========================================================
+   CS EMPREITEIRA | GESTÃO DE ATIVOS 2.0
+   CARREGAMENTO DINÂMICO DAS CATEGORIAS
+========================================================= */
+
+async function carregarCategoriasCSGA() {
+  const campo = document.getElementById("newAssetCategory");
+
+  if (!campo) return;
+
+  try {
+    const resposta = await jsonp({ action: "lists" });
+
+    if (!resposta || !resposta.ok || !resposta.listas) {
+      throw new Error("Não foi possível obter as listas.");
+    }
+
+    const categorias = resposta.listas.CATEGORIAS_EQUIPAMENTOS;
+
+    if (!Array.isArray(categorias) || categorias.length === 0) {
+      throw new Error("Nenhuma categoria foi encontrada.");
+    }
+
+    campo.innerHTML = '<option value="">Selecione...</option>';
+
+    categorias.forEach(item => {
+      const opcao = document.createElement("option");
+      opcao.value = item.value;
+      opcao.textContent = item.label;
+      campo.appendChild(opcao);
+    });
+
+    console.log("CSGA: categorias carregadas:", categorias.length);
+
+  } catch (erro) {
+    console.error("Erro ao carregar categorias:", erro);
+    campo.innerHTML = '<option value="">Erro ao carregar categorias</option>';
+  }
+}
+
+carregarCategoriasCSGA();
