@@ -1,0 +1,10 @@
+{
+  "name": "CS Empreiteira - Gestão de Ativos",
+  "short_name": "CS Ativos",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f8",
+  "theme_color": "#173b57",
+  "description": "Controle de equipamentos e movimentações da CS Empreiteira",
+  "icons": []
+}
