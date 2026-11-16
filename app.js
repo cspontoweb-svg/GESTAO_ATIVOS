@@ -67,14 +67,14 @@ async function searchEmployees(){
   const q=$("employeeSearch").value.trim();
   if(q.length<2){$("employeeResults").textContent="Digite pelo menos duas letras do nome.";return}
   try{
-    const d=await jsonp({action:"searchEmployees",q});
+    const d=await jsonp({action:"searchEmployees",q,deviceId});
     $("employeeResults").innerHTML=d.items.length?d.items.map(e=>`<div class="result-item"><strong>${esc(e.name)}</strong><button class="button secondary" data-key="${esc(e.key)}" data-name="${esc(e.name)}">Gerar QR Code</button></div>`).join(""):"Nenhum colaborador ativo encontrado.";
     $("employeeResults").querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>issueQr(b.dataset.key,b.dataset.name)));
   }catch(e){$("employeeResults").textContent=e.message}
 }
 async function issueQr(key,name){
   try{
-    const d=await postApi({action:"issueEmployeeQr",employeeKey:key});
+    const d=await postApi({action:"issueEmployeeQr",employeeKey:key,deviceId});
     $("employeeQrName").textContent=name;
     $("employeeQrImage").innerHTML="";
     if(!window.QRCode)throw new Error("Biblioteca de QR Code indisponível. Verifique a internet.");
@@ -88,7 +88,7 @@ async function lookupAsset(){
   const code=$("assetCode").value.trim().toUpperCase();
   if(!code){setMsg("operationMessage","Leia ou informe o código do equipamento.","error");return}
   try{
-    const d=await jsonp({action:"getAsset",code});
+    const d=await jsonp({action:"getAsset",code,deviceId});
     state.asset=d.asset;
     $("assetCard").className="asset-card";
     $("assetCard").innerHTML=`<div class="eyebrow">EQUIPAMENTO IDENTIFICADO</div><div class="asset-code">${esc(d.asset.code)}</div><h3>${esc(d.asset.name)}</h3><p>Situação: <strong>${esc(d.asset.statusLabel)}</strong></p><p>Localização: ${esc(d.asset.location||"Não informada")}</p><p>Responsável: ${esc(d.asset.holderName||"Sem responsável")}</p>`;
@@ -100,7 +100,8 @@ async function registerMovement(){
   const employeeQr=$("employeeQrToken").value.trim();
   const type=$("movementType").value;
   if(!assetCode||!employeeQr){setMsg("operationMessage","Leia o QR Code do equipamento e o QR Code pessoal do colaborador.","error");return}
-  const payload={action:"registerMovement",assetCode,employeeQr,type,condition:$("returnCondition").value,destinationFront:$("destinationFront").value.trim(),deviceId,requestId:makeId()};
+  const destinationValue=$("destinationFront").value.split("|");
+  const payload={action:"registerMovement",assetCode,employeeQr,type,destinationType:destinationValue[0]||"",destinationUnitId:destinationValue[1]||"",condition:$("returnCondition").value,destinationFront:$("destinationFront").value.trim(),deviceId,requestId:makeId()};
   $("submitMovement").disabled=true;
   try{
     const d=await postApi(payload);
@@ -143,7 +144,7 @@ async function adminLogin(){
     state.adminToken=d.token;$("adminModal").classList.add("hidden");$("adminPanel").classList.remove("hidden");
     $("adminLoginBtn").classList.add("hidden");
     if(d.device){$("adminDevice").value=d.device.name||"";$("adminWork").value=d.device.work||"";$("adminFront").value=d.device.front||"";$("adminWarehouse").value=d.device.warehouse||""}
-    setMsg("adminMessage","Acesso ADMIN autorizado.","success");
+    setMsg("adminMessage","Acesso ADMIN autorizado.","success");await v2LoadStructure();
   }catch(e){setMsg("adminLoginMessage",e.message,"error")}
 }
 async function adminPost(action,extra={}){if(!state.adminToken)throw new Error("Sessão ADMIN encerrada. Entre novamente.");return postApi({action,adminToken:state.adminToken,deviceId,...extra})}
@@ -166,7 +167,7 @@ async function generateReport(){
   const start=$("reportStart").value,end=$("reportEnd").value,type=$("reportType").value;
   if(!start||!end||start>end){setMsg("reportMessage","Informe um intervalo válido.","error");return}
   try{
-    const d=await jsonp({action:"report",start,end,type});
+    const d=await jsonp({action:"report",start,end,type,deviceId});
     const rows=d.movements.map(m=>`<tr><td>${esc(m.date)}</td><td>${esc(m.assetCode)}</td><td>${esc(m.employeeName)}</td><td>${esc(labelType(m.type))}</td><td>${esc(m.front)}</td><td>${esc(m.status)}</td></tr>`).join("");
     const pending=d.pending.map(p=>`<tr><td>${esc(p.assetCode)}</td><td>${esc(p.employeeName)}</td><td>${esc(p.front)}</td><td>EM POSSE</td></tr>`).join("");
     const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>CS Empreiteira - Relatório de Ativos</title><style>
@@ -196,3 +197,52 @@ window.addEventListener("online",loadDashboard);
 window.addEventListener("beforeunload",stopScan);
 if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});
 loadDashboard();
+
+
+/* CSGA 2.0 - administração dinâmica */
+async function v2LoadStructure(){
+  try{
+    const d=await adminPost("adminStructure");
+    const works=d.works||[],fronts=d.fronts||[],warehouses=d.warehouses||[];
+    const opts=works.map(w=>`<option value="${esc(w.id)}">${esc(w.name)} (${esc(w.id)})</option>`).join("");
+    ["v2WorkSelect","v2DeviceWork"].forEach(id=>{const el=$(id);if(el)el.innerHTML='<option value="">Selecione...</option>'+opts;});
+    const selected=$("v2WorkSelect");if(selected)selected.onchange=()=>v2RefreshUnitSelects(fronts,warehouses);
+    v2RefreshUnitSelects(fronts,warehouses);
+    const lines=[...works.map(w=>`<li><b>Obra:</b> ${esc(w.name)} (${esc(w.id)})</li>`),...fronts.map(u=>`<li>Frente ${esc(u.id)} — ${esc(u.name)} · Obra ${esc(u.work)} · ${esc(u.status)}</li>`),...warehouses.map(u=>`<li>Almoxarifado ${esc(u.id)} — ${esc(u.name)} · Obra ${esc(u.work)} · ${esc(u.status)}</li>`),...(d.devices||[]).map(x=>`<li>Tablet ${esc(x.name)} — ${esc(x.work)} / ${esc(x.type)} ${esc(x.unit)} · ${esc(x.status)}</li>`)];
+    $("v2Structure").innerHTML='<ul>'+lines.join("")+'</ul>';
+  }catch(e){setMsg("adminMessage",e.message,"error")}
+}
+function v2RefreshUnitSelects(fronts=[],warehouses=[]){
+  const work=$("v2DeviceWork")?.value||$("v2WorkSelect")?.value||"";
+  const type=$("v2UnitType")?.value||"FRENTE";
+  const units=(type==="FRENTE"?fronts:warehouses).filter(x=>x.work===work);
+  const sel=$("v2DeviceUnit");if(sel)sel.innerHTML='<option value="">Selecione...</option>'+units.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.id)})</option>`).join("");
+}
+async function v2SaveWork(){try{const r=await adminPost("adminSaveWork",{id:$("v2WorkId").value,name:$("v2WorkName").value});setMsg("adminMessage",r.message,"success");await v2LoadStructure()}catch(e){setMsg("adminMessage",e.message,"error")}}
+async function v2SaveUnit(){try{const r=await adminPost("adminSaveUnit",{work:$("v2WorkSelect").value,type:$("v2UnitType").value,id:$("v2UnitId").value,name:$("v2UnitName").value});setMsg("adminMessage",r.message,"success");await v2LoadStructure()}catch(e){setMsg("adminMessage",e.message,"error")}}
+async function v2SaveDevice(){try{const work=$("v2DeviceWork").value,unit=$("v2DeviceUnit").value,type=$("v2UnitType").value;const r=await adminPost("saveDevice",{deviceName:$("v2DeviceName").value,work,unitType:type,unitId:unit});setMsg("adminMessage",r.message,"success");await v2LoadStructure();await loadDashboard()}catch(e){setMsg("adminMessage",e.message,"error")}}
+if($("v2SaveWork"))$("v2SaveWork").onclick=v2SaveWork;
+if($("v2SaveUnit"))$("v2SaveUnit").onclick=v2SaveUnit;
+if($("v2SaveDevice"))$("v2SaveDevice").onclick=v2SaveDevice;
+if($("v2RefreshStructure"))$("v2RefreshStructure").onclick=v2LoadStructure;
+if($("v2DeviceWork"))$("v2DeviceWork").onchange=()=>v2LoadStructure();
+if($("v2UnitType"))$("v2UnitType").onchange=()=>v2LoadStructure();
+
+async function loadTransferDestinations(){try{const d=await jsonp({action:"destinations",deviceId});const el=$("destinationFront");if(el)el.innerHTML='<option value="">Selecione a unidade de destino</option>'+d.items.map(x=>`<option value="${esc(x.type)}|${esc(x.id)}">${esc(x.name)} (${esc(x.type)})</option>`).join("");}catch(e){setMsg("operationMessage",e.message,"error")}}
+const _movementTypeChange=$("movementType").onchange;$("movementType").onchange=()=>{if(_movementTypeChange)_movementTypeChange();if($("movementType").value==="TRANSFERENCIA_SAIDA")loadTransferDestinations()};
+
+/* Importação CSV ADMIN: upsert por matrícula/ID, preservando QR e histórico. */
+async function importCsvFile(inputId,action){
+  const file=$(inputId)?.files?.[0];if(!file){setMsg("csvImportMessage","Selecione um arquivo CSV.","error");return;}
+  try{
+    const csv=await file.text();if(!csv.trim())throw new Error("Arquivo vazio.");
+    setMsg("csvImportMessage","Importando e validando registros... aguarde.");
+    const r=await adminPost(action,{csv});
+    const detail=(r.errors||[]).slice(0,12).join("\n");
+    setMsg("csvImportMessage",`${r.message} Novos: ${r.inserted}; atualizados: ${r.updated}; erros: ${(r.errors||[]).length}.`+(detail?"\n"+detail:""),r.errors?.length?"error":"success");
+    if(inputId==="csvEmployees")await loadAdminEmployees();
+    await v2LoadStructure();await loadDashboard();
+  }catch(e){setMsg("csvImportMessage",e.message,"error")}
+}
+if($("importEmployeesBtn"))$("importEmployeesBtn").onclick=()=>importCsvFile("csvEmployees","importEmployeesCsv");
+if($("importAssetsBtn"))$("importAssetsBtn").onclick=()=>importCsvFile("csvAssets","importAssetsCsv");
